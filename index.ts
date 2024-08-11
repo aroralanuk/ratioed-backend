@@ -1,11 +1,17 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import fetchTweet from "./src/tweets";
+import cors from "cors";
 
 const app = express();
 const prisma = new PrismaClient();
 
-app.use(express.json());
+app.use(
+  cors({
+    origin: "*", // Allow all origins
+    credentials: true,
+  })
+);
 
 function replacer(key: any, value: any) {
   if (typeof value === "bigint") {
@@ -21,9 +27,43 @@ function serializeResponse(data: any) {
 // Get all markets
 app.get("/markets", async (req, res) => {
   try {
-    const markets = await prisma.ratioed_market.findMany();
-    const serializedMarkets = JSON.stringify(markets, replacer);
-    res.json(JSON.parse(serializedMarkets));
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    const [markets, totalCount] = await prisma.$transaction([
+      prisma.ratioed_market.findMany({
+        include: {
+          tweet_detail: true,
+        },
+        skip,
+        take: limit,
+        orderBy: {
+          id: "desc", // Adjust ordering as needed
+        },
+      }),
+      prisma.ratioed_market.count(),
+    ]);
+
+    const serializedMarkets = JSON.stringify(markets, (key, value) => {
+      if (typeof value === "bigint") {
+        return value.toString();
+      }
+      return value;
+    });
+
+    const parsedMarkets = JSON.parse(serializedMarkets).map((market: any) => ({
+      ...market,
+      tweet_details: market.tweet_detail,
+      tweet_detail: undefined,
+    }));
+
+    res.json({
+      markets: parsedMarkets,
+      totalPages: Math.ceil(totalCount / limit),
+      currentPage: page,
+      totalCount,
+    });
   } catch (error) {
     console.error("Error fetching markets:", error);
     res.status(500).json({ error: "Error fetching markets" });
@@ -214,7 +254,7 @@ app.post("/update-tweets", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () =>
   console.log(`Server is running on http://localhost:${PORT}`)
 );
